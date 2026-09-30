@@ -383,27 +383,18 @@ def main():
         return
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # 使用不包含 \~ 符号的过滤器，避免手机复制时出错
+    text_filter = filters.TEXT & filters.Regex(r"^(?!/)")
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("newrace", newrace)],
         states={
-            TITLE: [
-                MessageHandler(filters.TEXT & \~filters.COMMAND, receive_title)
-            ],
-            COUNTDOWN: [
-                MessageHandler(filters.TEXT & \~filters.COMMAND, receive_countdown)
-            ],
-            WINNER_MODE: [
-                CallbackQueryHandler(winner_mode)
-            ],
-            PUBLIC_RANK: [
-                CallbackQueryHandler(public_rank)
-            ],
-            SHOW_USERNAME: [
-                CallbackQueryHandler(show_username)
-            ],
-            CONFIRM: [
-                MessageHandler(filters.TEXT & \~filters.COMMAND, receive_channel)
-            ],
+            TITLE: [MessageHandler(text_filter, receive_title)],
+            COUNTDOWN: [MessageHandler(text_filter, receive_countdown)],
+            WINNER_MODE: [CallbackQueryHandler(winner_mode)],
+            PUBLIC_RANK: [CallbackQueryHandler(public_rank)],
+            SHOW_USERNAME: [CallbackQueryHandler(show_username)],
+            CONFIRM: [MessageHandler(text_filter, receive_channel)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
