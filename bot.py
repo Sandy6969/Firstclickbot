@@ -8,9 +8,12 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # ====================== 这里必须修改 ======================
-BOT_TOKEN = "8944063576:AAH_M3kcKnYFBdEO6L4hHH5pZNvU1hJK1Qg"
-OWNER_ID = 7810866246          # 这里改成你自己的数字ID
-OWNER_USERNAME = "_chen86"  # 不带@
+import os
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID"))
+OWNER_USERNAME = os.getenv("OWNER_USERNAME")
+
 # ========================================================
 
 TITLE, COUNTDOWN, WINNER_MODE, PUBLIC_RANK, SHOW_USERNAME, CONFIRM = range(6)
