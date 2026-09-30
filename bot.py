@@ -3,16 +3,19 @@ import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes, ConversationHandler
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    ConversationHandler
 )
 from telegram.constants import ParseMode
 
-# ====================== 环境变量 ======================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 OWNER_USERNAME = os.getenv("OWNER_USERNAME", "Owner")
-# =====================================================
 
 TITLE, COUNTDOWN, WINNER_MODE, PUBLIC_RANK, SHOW_USERNAME, CONFIRM = range(6)
 races = {}
@@ -33,7 +36,6 @@ async def newrace(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update.effective_user.id):
         await update.message.reply_text("⛔ Only the owner can create races.")
         return ConversationHandler.END
-
     await update.message.reply_text(
         "✨ *FirstClick Pro - Create New Race*\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -60,10 +62,9 @@ async def receive_countdown(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Please enter a number between 3 and 300.")
             return COUNTDOWN
         context.user_data["countdown"] = seconds
-    except:
+    except Exception:
         await update.message.reply_text("Please enter a valid number.")
         return COUNTDOWN
-
     keyboard = [
         [InlineKeyboardButton("Show Real Username", callback_data="winner_show")],
         [InlineKeyboardButton("Anonymous (Hide Username)", callback_data="winner_hide")]
@@ -80,7 +81,6 @@ async def winner_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data["winner_show"] = (query.data == "winner_show")
-
     keyboard = [
         [InlineKeyboardButton("Yes - Show Full Ranking", callback_data="public_yes")],
         [InlineKeyboardButton("No - Only Private Rank", callback_data="public_no")]
@@ -96,7 +96,6 @@ async def public_rank(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data["public_rank"] = (query.data == "public_yes")
-
     if context.user_data["public_rank"]:
         keyboard = [
             [InlineKeyboardButton("Show Usernames", callback_data="name_show")],
@@ -125,7 +124,6 @@ async def confirm_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
     winner_show = "Show Real Username" if context.user_data["winner_show"] else "Anonymous"
     public = "Yes" if context.user_data["public_rank"] else "No"
     show_name = "Show Usernames" if context.user_data.get("show_username") else "Anonymous"
-
     text = (
         f"✅ *Race Created Successfully!*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -148,10 +146,8 @@ async def receive_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not channel.startswith("@"):
         await update.message.reply_text("Please send channel username starting with @")
         return CONFIRM
-
     context.user_data["channel"] = channel
     race_id = f"FC-{int(datetime.now().timestamp())}"
-
     races[race_id] = {
         "title": context.user_data["title"],
         "countdown": context.user_data["countdown"],
@@ -163,7 +159,6 @@ async def receive_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "message_id": None,
         "clicks": {}
     }
-
     keyboard = [[InlineKeyboardButton("📢 Publish to Channel", callback_data=f"publish_{race_id}")]]
     await update.message.reply_text(
         f"Channel set: *{channel}*\n\n"
@@ -179,17 +174,14 @@ async def publish_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if not is_owner(query.from_user.id):
         return
-
     race_id = query.data.replace("publish_", "")
     race = races.get(race_id)
     if not race:
         await query.edit_message_text("Race not found.")
         return
-
     channel = race["channel"]
     title = race["title"]
     countdown = race["countdown"]
-
     text = (
         "🏆 *CUSTOM RACE* 🏆\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -206,7 +198,6 @@ async def publish_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     race["message_id"] = msg.message_id
     race["status"] = "countdown"
-
     context.job_queue.run_repeating(
         countdown_job,
         interval=1,
@@ -227,16 +218,13 @@ async def countdown_job(context: ContextTypes.DEFAULT_TYPE):
     race_id = data["race_id"]
     remaining = data["remaining"] - 1
     data["remaining"] = remaining
-
     race = races.get(race_id)
     if not race:
         job.schedule_removal()
         return
-
     title = race["title"]
     channel = data["chat_id"]
     message_id = data["message_id"]
-
     if remaining > 0:
         text = (
             "🏆 *CUSTOM RACE* 🏆\n"
@@ -283,35 +271,29 @@ async def countdown_job(context: ContextTypes.DEFAULT_TYPE):
 async def handle_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     race_id = query.data.replace("click_", "")
     race = races.get(race_id)
     if not race or race["status"] != "live":
         await query.answer("This race is not active.", show_alert=True)
         return
-
     user = query.from_user
     user_id = user.id
     username = user.username or user.full_name
-
     if user_id in race["clicks"]:
         await query.answer("You already clicked!", show_alert=True)
         return
-
     click_time = get_time_str()
     race["clicks"][user_id] = {
         "username": username,
         "time": click_time,
         "timestamp": datetime.now().timestamp()
     }
-
     sorted_clicks = sorted(race["clicks"].items(), key=lambda x: x[1]["timestamp"])
     result_text = (
         "✨ *RACE RESULTS* ✨\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"Title: *{race['title']}*\n\n"
     )
-
     for i, (uid, data) in enumerate(sorted_clicks[:3], 1):
         medal = ["🥇", "🥈", "🥉"][i-1]
         if i == 1:
@@ -319,7 +301,6 @@ async def handle_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             name = data["username"] if race["show_username"] else f"Player #{i}"
         result_text += f"{medal} *{i}st Place*\n{name}\nTime: `{data['time']}`\n\n"
-
     if race["public_rank"]:
         result_text += "━━━━━━━━━━━━━━━━━━━━\n"
         if race["winner_show"]:
@@ -333,9 +314,7 @@ async def handle_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "The full ranking is private.\n"
             "Participants can check their own rank using /myrank\n"
         )
-
     result_text += f"\nOwned by @{OWNER_USERNAME}"
-
     try:
         await context.bot.edit_message_text(
             chat_id=race["channel"],
@@ -345,21 +324,15 @@ async def handle_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(e)
-
     await context.bot.send_message(
         chat_id=user_id,
-        text=(
-            f"✅ Your click has been recorded!\n"
-            f"Time: `{click_time}`\n"
-            f"Use /myrank to check your position later."
-        ),
+        text=f"✅ Your click has been recorded!\nTime: `{click_time}`\nUse /myrank to check your position later.",
         parse_mode=ParseMode.MARKDOWN
     )
 
 async def myrank(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     found = False
-
     for race_id, race in races.items():
         if user_id in race["clicks"]:
             sorted_clicks = sorted(race["clicks"].items(), key=lambda x: x[1]["timestamp"])
@@ -408,18 +381,29 @@ def main():
     if not BOT_TOKEN:
         print("Error: BOT_TOKEN not set")
         return
-
     app = Application.builder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("newrace", newrace)],
         states={
-            TITLE: [MessageHandler(filters.TEXT & \~filters.COMMAND, receive_title)],
-            COUNTDOWN: [MessageHandler(filters.TEXT & \~filters.COMMAND, receive_countdown)],
-            WINNER_MODE: [CallbackQueryHandler(winner_mode)],
-            PUBLIC_RANK: [CallbackQueryHandler(public_rank)],
-            SHOW_USERNAME: [CallbackQueryHandler(show_username)],
-            CONFIRM: [MessageHandler(filters.TEXT & \~filters.COMMAND, receive_channel)],
+            TITLE: [
+                MessageHandler(filters.TEXT & \~filters.COMMAND, receive_title)
+            ],
+            COUNTDOWN: [
+                MessageHandler(filters.TEXT & \~filters.COMMAND, receive_countdown)
+            ],
+            WINNER_MODE: [
+                CallbackQueryHandler(winner_mode)
+            ],
+            PUBLIC_RANK: [
+                CallbackQueryHandler(public_rank)
+            ],
+            SHOW_USERNAME: [
+                CallbackQueryHandler(show_username)
+            ],
+            CONFIRM: [
+                MessageHandler(filters.TEXT & \~filters.COMMAND, receive_channel)
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
