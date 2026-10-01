@@ -2,7 +2,7 @@ import os
 import html
 import sqlite3
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from telegram import (
@@ -750,7 +750,9 @@ async def publish_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_title = chat.title or chat.username or str(chat.id)
         chat_type = chat.type
 
-        start_time = utc_now()
+                start_time = utc_now() + timedelta(
+            seconds=race["countdown"]
+        )
 
         race["status"] = "countdown"
         race["start_at"] = start_time
@@ -799,8 +801,10 @@ async def publish_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
             start_at_utc=utc_iso(start_time),
         )
 
-        schedule_race(context.application, race_id)
-
+        schedule_race(
+            context.application,
+            race_id,
+        )
         await query.edit_message_text(
             f"✅ <b>RACE PUBLISHED</b>\n\n"
             f"📍 {h(chat_title)}\n"
