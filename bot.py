@@ -863,4 +863,1031 @@ async def countdown_job(context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton(
                     f"🔒 {remaining}",
                     callback_data=f"locked_{race_id}",
-                
+                                )
+            ]
+        ]
+
+        try:
+            await context.bot.edit_message_text(
+                chat_id=race["chat_id"],
+                message_id=race["message_id"],
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+
+        except Exception as e:
+            logger.warning(
+                "Countdown edit failed: %s",
+                e,
+            )
+
+        return
+
+    # =====================================================
+    # RACE START
+    # =====================================================
+
+    race["status"] = "live"
+
+    update_race_db(
+        race_id,
+        status="live",
+    )
+
+    text = (
+        "🚨🔥 <b>RACE IS LIVE!</b> 🔥🚨\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🏆 <b>{h(race['title'])}</b>\n\n"
+        "⚡ <b>FIRST CLICK WINS</b>\n\n"
+        "The fastest participant gets the crown.\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🔥 <b>GO! GO! GO!</b> 🔥"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🏆 CLAIM NOW 🏆",
+                callback_data=f"click_{race_id}",
+            )
+        ]
+    ]
+
+    try:
+        await context.bot.edit_message_text(
+            chat_id=race["chat_id"],
+            message_id=race["message_id"],
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+
+    except Exception as e:
+        logger.exception(
+            "Race start edit failed"
+        )
+
+    context.job.schedule_removal()
+
+
+# =========================================================
+# LOCKED BUTTON
+# =========================================================
+
+async def locked_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    await query.answer(
+        "🔒 Race hasn't started yet. Please wait!",
+        show_alert=True,
+    )
+
+
+# =========================================================
+# CLAIM / WINNER
+# =========================================================
+
+async def handle_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    race_id = query.data.replace("click_", "", 1)
+
+    race = races.get(race_id)
+
+    if not race:
+        await query.answer(
+            "Race no longer exists.",
+            show_alert=True,
+        )
+        return
+
+    if race["status"] != "live":
+
+        await query.answer(
+            "This race is not active.",
+            show_alert=True,
+        )
+
+        return
+
+    user = query.from_user
+    user_id = user.id
+
+    # =====================================================
+    # FIRST CLICK WINS
+    # =====================================================
+
+    click_time_utc = utc_now()
+
+    username = user.username
+    display_name = user.full_name or "Unknown User"
+
+    # Prevent duplicate
+    if user_id in race["clicks"]:
+
+        await query.answer(
+            "You already clicked!",
+            show_alert=True,
+        )
+
+        return
+
+    race["clicks"][user_id] = {
+        "username": username,
+        "display_name": display_name,
+        "time_utc": click_time_utc,
+    }
+
+    race["status"] = "finished"
+
+    timezone_name = get_user_timezone(user_id)
+
+    local_time = format_local_time(
+        click_time_utc,
+        timezone_name,
+    )
+
+    username_display = (
+        f"@{h(username)}"
+        if username
+        else h(display_name)
+    )
+
+    winner_display = (
+        username_display
+        if race["winner_show"]
+        else "Anonymous Winner"
+    )
+
+    # =====================================================
+    # SAVE WINNER
+    # =====================================================
+
+    update_race_db(
+        race_id,
+        status="finished",
+        ended_at_utc=utc_iso(click_time_utc),
+        winner_user_id=user_id,
+        winner_username=username,
+        winner_display_name=display_name,
+        winner_time_utc=utc_iso(click_time_utc),
+    )
+
+    db_execute(
+        """
+        INSERT OR IGNORE INTO participants(
+            race_id,
+            user_id,
+            username,
+            display_name,
+            clicked_at_utc,
+            timezone,
+            rank
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            race_id,
+            user_id,
+            username,
+            display_name,
+            utc_iso(click_time_utc),
+            timezone_name,
+            1,
+        ),
+    )
+
+    # =====================================================
+    # RESULT MESSAGE
+    # =====================================================
+
+    result_text = (
+        "🏆✨🏆✨🏆✨🏆✨🏆\n\n"
+        "👑 <b>WINNER</b> 👑\n\n"
+        "🥇\n\n"
+        f"<b>{winner_display}</b>\n\n"
+        "⚡ <b>1ST PLACE</b> ⚡\n\n"
+        f"🕐 UTC:\n"
+        f"<code>{h(utc_iso(click_time_utc))}</code>\n\n"
+        f"🌍 Local Time:\n"
+        f"<code>{h(local_time)}</code>\n\n"
+        "🔥 <b>LEGENDARY SPEED!</b> 🔥\n\n"
+        "🏆✨🏆✨🏆✨🏆✨🏆"
+    )
+
+    try:
+        await context.bot.edit_message_text(
+            chat_id=race["chat_id"],
+            message_id=race["message_id"],
+            text=result_text,
+            parse_mode=ParseMode.HTML,
+        )
+
+    except Exception as e:
+        logger.exception(
+            "Winner message edit failed"
+        )
+
+    await query.answer(
+        "🏆 YOU WON!",
+        show_alert=True,
+    )
+
+    # =====================================================
+    # PRIVATE MESSAGE
+    # =====================================================
+
+    try:
+
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=(
+                "🏆✨ <b>CONGRATULATIONS!</b> ✨🏆\n\n"
+                "👑 <b>YOU ARE THE WINNER!</b>\n\n"
+                f"🏆 Race:\n"
+                f"<b>{h(race['title'])}</b>\n\n"
+                f"🕐 UTC:\n"
+                f"<code>{h(utc_iso(click_time_utc))}</code>\n\n"
+                f"🌍 Your Local Time:\n"
+                f"<code>{h(local_time)}</code>\n\n"
+                "🥇 <b>1ST PLACE</b>"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+
+    except Exception as e:
+
+        logger.warning(
+            "Could not send private winner message: %s",
+            e,
+        )
+
+
+# =========================================================
+# MY RANK
+# =========================================================
+
+async def myrank(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    rows = db_execute(
+        """
+        SELECT
+            p.*,
+            r.title,
+            r.status
+        FROM participants p
+        JOIN races r
+            ON p.race_id = r.race_id
+        WHERE p.user_id = ?
+        ORDER BY p.id DESC
+        LIMIT 10
+        """,
+        (user_id,),
+        fetchall=True,
+    )
+
+    if not rows:
+
+        await update.message.reply_text(
+            "📊 <b>YOUR RACE HISTORY</b>\n\n"
+            "You haven't participated in any race yet.",
+            parse_mode=ParseMode.HTML,
+        )
+
+        return
+
+    text = (
+        "📊 <b>YOUR RACE HISTORY</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    timezone_name = get_user_timezone(user_id)
+
+    for row in rows:
+
+        clicked = parse_utc(
+            row["clicked_at_utc"]
+        )
+
+        local_time = format_local_time(
+            clicked,
+            timezone_name,
+        )
+
+        text += (
+            f"🏆 <b>{h(row['title'])}</b>\n"
+            f"🥇 Position: <b>{ordinal(row['rank'])}</b>\n"
+            f"🕐 {h(local_time)}\n\n"
+        )
+
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# =========================================================
+# TIMEZONE
+# =========================================================
+
+TIMEZONE_OPTIONS = {
+    "tz_jakarta": "Asia/Jakarta",
+    "tz_singapore": "Asia/Singapore",
+    "tz_kuala": "Asia/Kuala_Lumpur",
+    "tz_tokyo": "Asia/Tokyo",
+    "tz_shanghai": "Asia/Shanghai",
+    "tz_newyork": "America/New_York",
+    "tz_losangeles": "America/Los_Angeles",
+    "tz_london": "Europe/London",
+}
+
+
+async def timezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if context.args:
+
+        timezone_name = context.args[0]
+
+        try:
+            ZoneInfo(timezone_name)
+
+        except ZoneInfoNotFoundError:
+
+            await update.message.reply_text(
+                "❌ Invalid timezone.\n\n"
+                "Example:\n"
+                "<code>/timezone Asia/Jakarta</code>",
+                parse_mode=ParseMode.HTML,
+            )
+
+            return
+
+        save_user_timezone(
+            update.effective_user.id,
+            timezone_name,
+        )
+
+        await update.message.reply_text(
+            f"✅ <b>Timezone Saved</b>\n\n"
+            f"🌍 {h(timezone_name)}",
+            parse_mode=ParseMode.HTML,
+        )
+
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🇮🇩 Jakarta",
+                callback_data="tz_jakarta",
+            ),
+            InlineKeyboardButton(
+                "🇸🇬 Singapore",
+                callback_data="tz_singapore",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🇲🇾 Kuala Lumpur",
+                callback_data="tz_kuala",
+            ),
+            InlineKeyboardButton(
+                "🇯🇵 Tokyo",
+                callback_data="tz_tokyo",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🇨🇳 Shanghai",
+                callback_data="tz_shanghai",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🇺🇸 New York",
+                callback_data="tz_newyork",
+            ),
+            InlineKeyboardButton(
+                "🇺🇸 Los Angeles",
+                callback_data="tz_losangeles",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🇬🇧 London",
+                callback_data="tz_london",
+            ),
+        ],
+    ]
+
+    current = get_user_timezone(
+        update.effective_user.id
+    )
+
+    await update.message.reply_text(
+        "🌍 <b>YOUR TIMEZONE</b>\n\n"
+        f"Current:\n"
+        f"<code>{h(current)}</code>\n\n"
+        "Choose your local timezone:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    timezone_name = TIMEZONE_OPTIONS.get(query.data)
+
+    if not timezone_name:
+        await query.answer("Invalid timezone.")
+        return
+
+    save_user_timezone(
+        query.from_user.id,
+        timezone_name,
+    )
+
+    await query.answer(
+        "Timezone saved!",
+        show_alert=True,
+    )
+
+    await query.edit_message_text(
+        "🌍 <b>TIMEZONE SAVED</b>\n\n"
+        f"Your timezone:\n"
+        f"<code>{h(timezone_name)}</code>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+#
+=========================================================
+# ADMIN PANEL
+# =========================================================
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if not is_owner(update.effective_user.id):
+        await update.message.reply_text("⛔ Owner only.")
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🟢 ACTIVE RACES",
+                callback_data="admin_active",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📜 RACE HISTORY",
+                callback_data="admin_history",
+            )
+        ],
+    ]
+
+    await update.message.reply_text(
+        "👑 <b>ADMIN PANEL</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Manage your FirstClick races:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def admin_active(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    if not is_owner(query.from_user.id):
+        await query.answer("Owner only.", show_alert=True)
+        return
+
+    rows = db_execute(
+        """
+        SELECT *
+        FROM races
+        WHERE status IN ('countdown', 'live')
+        ORDER BY created_at_utc DESC
+        """,
+        fetchall=True,
+    )
+
+    if not rows:
+
+        await query.edit_message_text(
+            "🟢 <b>ACTIVE RACES</b>\n\n"
+            "No active races.",
+            parse_mode=ParseMode.HTML,
+        )
+
+        return
+
+    text = (
+        "🟢 <b>ACTIVE RACES</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    keyboard = []
+
+    for row in rows:
+
+        text += (
+            f"🏆 <b>{h(row['title'])}</b>\n"
+            f"📍 {h(row['chat_title'] or row['destination'])}\n"
+            f"⚡ Status: <b>{h(row['status'])}</b>\n"
+            f"🆔 <code>{h(row['race_id'])}</code>\n\n"
+        )
+
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    f"🗑 Delete {row['race_id']}",
+                    callback_data=f"delete_confirm_{row['race_id']}",
+                )
+            ]
+        )
+
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "🔄 Refresh",
+                callback_data="admin_active",
+            )
+        ]
+    )
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def admin_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    if not is_owner(query.from_user.id):
+        await query.answer("Owner only.", show_alert=True)
+        return
+
+    rows = db_execute(
+        """
+        SELECT *
+        FROM races
+        ORDER BY created_at_utc DESC
+        LIMIT 15
+        """,
+        fetchall=True,
+    )
+
+    if not rows:
+
+        await query.edit_message_text(
+            "📜 <b>RACE HISTORY</b>\n\n"
+            "No races recorded.",
+            parse_mode=ParseMode.HTML,
+        )
+
+        return
+
+    text = (
+        "📜 <b>RACE HISTORY</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    for row in rows:
+
+        winner = "—"
+
+        if row["winner_username"]:
+            winner = f"@{row['winner_username']}"
+
+        elif row["winner_display_name"]:
+            winner = row["winner_display_name"]
+
+        text += (
+            f"🏆 <b>{h(row['title'])}</b>\n"
+            f"📍 {h(row['chat_title'] or row['destination'])}\n"
+            f"📌 Status: <b>{h(row['status'])}</b>\n"
+            f"👑 Winner: <b>{h(winner)}</b>\n"
+            f"🆔 <code>{h(row['race_id'])}</code>\n\n"
+        )
+
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# =========================================================
+# DELETE RACE
+# =========================================================
+
+async def delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    if not is_owner(query.from_user.id):
+        await query.answer("Owner only.", show_alert=True)
+        return
+
+    race_id = query.data.replace(
+        "delete_confirm_",
+        "",
+        1,
+    )
+
+    row = get_race_db(race_id)
+
+    if not row:
+        await query.answer(
+            "Race not found.",
+            show_alert=True,
+        )
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "❌ CANCEL",
+                callback_data="admin_active",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🗑 YES, DELETE",
+                callback_data=f"delete_yes_{race_id}",
+            )
+        ],
+    ]
+
+    await query.edit_message_text(
+        "⚠️ <b>DELETE ACTIVE RACE?</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🏆 <b>{h(row['title'])}</b>\n"
+        f"📍 {h(row['chat_title'] or row['destination'])}\n"
+        f"⚡ Status: <b>{h(row['status'])}</b>\n\n"
+        "The race will be stopped.\n"
+        "The history record will remain.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def delete_yes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    if not is_owner(query.from_user.id):
+        await query.answer("Owner only.", show_alert=True)
+        return
+
+    race_id = query.data.replace(
+        "delete_yes_",
+        "",
+        1,
+    )
+
+    row = get_race_db(race_id)
+
+    if not row:
+        await query.answer(
+            "Race not found.",
+            show_alert=True,
+        )
+        return
+
+    remove_race_jobs(
+        context.application,
+        race_id,
+    )
+
+    race = races.get(race_id)
+
+    if race:
+
+        try:
+
+            await context.bot.edit_message_text(
+                chat_id=race["chat_id"],
+                message_id=race["message_id"],
+                text=(
+                    "🗑 <b>RACE CANCELLED</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"🏆 {h(race['title'])}\n\n"
+                    "This race has been cancelled by the administrator."
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+
+        except Exception as e:
+
+            logger.warning(
+                "Could not edit deleted race: %s",
+                e,
+            )
+
+        races.pop(race_id, None)
+
+    update_race_db(
+        race_id,
+        status="deleted",
+        ended_at_utc=utc_iso(),
+    )
+
+    await query.answer(
+        "Race deleted.",
+        show_alert=True,
+    )
+
+    await admin_active(
+        update,
+        context,
+    )
+
+
+# =========================================================
+# CANCEL
+# =========================================================
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text(
+        "❌ Operation cancelled."
+    )
+
+    return ConversationHandler.END
+
+
+# =========================================================
+# START
+# =========================================================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if is_owner(update.effective_user.id):
+
+        await update.message.reply_text(
+            "👑 <b>FIRSTCLICK PRO</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Welcome, Owner!\n\n"
+            "🏆 <b>Commands</b>\n\n"
+            "/newrace — Create race\n"
+            "/admin — Admin panel\n"
+            "/myrank — Your race history\n"
+            "/timezone — Set your timezone\n"
+            "/cancel — Cancel current setup",
+            parse_mode=ParseMode.HTML,
+        )
+
+    else:
+
+        await update.message.reply_text(
+            "🏆 <b>FIRSTCLICK PRO</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Join races through the race channel.\n\n"
+            "/myrank — Check your race history\n"
+            "/timezone — Set your local timezone\n\n"
+            f"👑 Owner: {owner_label()}",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+# =========================================================
+# RESTORE ACTIVE RACES AFTER RAILWAY RESTART
+# =========================================================
+
+async def post_init(application: Application):
+
+    init_db()
+
+    rows = db_execute(
+        """
+        SELECT *
+        FROM races
+        WHERE status IN ('countdown', 'live')
+        """,
+        fetchall=True,
+    )
+
+    for row in rows:
+
+        race = {
+            "title": row["title"],
+            "countdown": row["countdown"],
+            "winner_show": bool(row["winner_show"]),
+            "public_rank": bool(row["public_rank"]),
+            "show_username": bool(row["show_username"]),
+            "destination": row["destination"],
+            "status": row["status"],
+            "message_id": row["message_id"],
+            "chat_id": row["chat_id"],
+            "chat_title": row["chat_title"],
+            "clicks": {},
+        }
+
+        if row["start_at_utc"]:
+            race["start_at"] = parse_utc(
+                row["start_at_utc"]
+            )
+
+        races[row["race_id"]] = race
+
+        if row["status"] == "countdown":
+
+            schedule_race(
+                application,
+                row["race_id"],
+            )
+
+    logger.info(
+        "Restored %s active race(s).",
+        len(rows),
+    )
+
+
+# =========================================================
+# MAIN
+# =========================================================
+
+def main():
+
+    if not BOT_TOKEN:
+
+        print("Error: BOT_TOKEN not set")
+        return
+
+    init_db()
+
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+
+    text_filter = filters.TEXT & filters.Regex(
+        r"^(?!/)"
+    )
+
+    conv_handler = ConversationHandler(
+
+        entry_points=[
+            CommandHandler(
+                "newrace",
+                newrace,
+            )
+        ],
+
+        states={
+
+            TITLE: [
+                MessageHandler(
+                    text_filter,
+                    receive_title,
+                )
+            ],
+
+            COUNTDOWN: [
+                MessageHandler(
+                    text_filter,
+                    receive_countdown,
+                )
+            ],
+
+            WINNER_MODE: [
+                CallbackQueryHandler(
+                    winner_mode
+                )
+            ],
+
+            PUBLIC_RANK: [
+                CallbackQueryHandler(
+                    public_rank
+                )
+            ],
+
+            SHOW_USERNAME: [
+                CallbackQueryHandler(
+                    show_username
+                )
+            ],
+
+            CONFIRM: [
+                MessageHandler(
+                    text_filter,
+                    receive_channel,
+                )
+            ],
+        },
+
+        fallbacks=[
+            CommandHandler(
+                "cancel",
+                cancel,
+            )
+        ],
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "start",
+            start,
+        )
+    )
+
+    app.add_handler(conv_handler)
+
+    app.add_handler(
+        CallbackQueryHandler(
+            publish_race,
+            pattern=r"^publish_",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            locked_click,
+            pattern=r"^locked_",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            handle_click,
+            pattern=r"^click_",
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "myrank",
+            myrank,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "timezone",
+            timezone_command,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "admin",
+            admin,
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            timezone_callback,
+            pattern=r"^tz_",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_active,
+            pattern=r"^admin_active$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            admin_history,
+            pattern=r"^admin_history$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            delete_confirm,
+            pattern=r"^delete_confirm_",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            delete_yes,
+            pattern=r"^delete_yes_",
+        )
+    )
+
+    print("Bot is running...")
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
