@@ -750,7 +750,7 @@ async def publish_race(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_title = chat.title or chat.username or str(chat.id)
         chat_type = chat.type
 
-                start_time = utc_now() + timedelta(
+        start_time = utc_now() + timedelta(
             seconds=race["countdown"]
         )
 
